@@ -5,6 +5,12 @@ export interface IAppliance {
   defaultWattage: number;
   category: ApplianceCategory;
   icon: string;
+  surgeMultiplier?: number; // Motor loads: 3-5x. Default 1.0 for resistive loads.
+}
+
+export interface TimeSlot {
+  from: number; // Hour 0-23
+  to: number;   // Hour 0-23 (wraps past midnight if to < from)
 }
 
 export interface ISelectedAppliance {
@@ -17,6 +23,8 @@ export interface ISelectedAppliance {
   hoursNight: number;
   customWattage: number;
   defaultWattage: number;
+  surgeMultiplier: number;
+  timeSlots: TimeSlot[];
   source?: "db" | "ai" | "es";
 }
 

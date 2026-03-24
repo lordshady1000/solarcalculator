@@ -1,6 +1,6 @@
 "use client";
 import { create } from "zustand";
-import type { ISelectedAppliance, IAppliance, SystemResult } from "@/types";
+import type { ISelectedAppliance, IAppliance, SystemResult, TimeSlot } from "@/types";
 import { calculateSystem } from "@/utils/calculator";
 import { DEFAULT_HOURS_DAY, DEFAULT_HOURS_NIGHT, DEFAULT_QUANTITY } from "@/utils/constants";
 
@@ -12,6 +12,7 @@ interface SolarStore {
   removeAppliance: (id: string) => void;
   updateQuantity: (id: string, delta: number) => void;
   updateField: (id: string, field: keyof ISelectedAppliance, value: number) => void;
+  updateSchedule: (id: string, timeSlots: TimeSlot[], hoursDay: number, hoursNight: number) => void;
   toggleExpansion: () => void;
   runCalculation: () => void;
   clearAll: () => void;
@@ -36,6 +37,8 @@ export const useSolarStore = create<SolarStore>((set, get) => ({
       category: appliance.category, quantity: DEFAULT_QUANTITY,
       hoursDay: DEFAULT_HOURS_DAY, hoursNight: DEFAULT_HOURS_NIGHT,
       customWattage: appliance.defaultWattage, defaultWattage: appliance.defaultWattage,
+      surgeMultiplier: appliance.surgeMultiplier || 1.0,
+      timeSlots: [{ from: 8, to: 17 }],
       source,
     }]});
   },
@@ -48,6 +51,12 @@ export const useSolarStore = create<SolarStore>((set, get) => ({
 
   updateField: (id, field, value) => set(s => ({
     selectedAppliances: s.selectedAppliances.map(x => x.id === id ? { ...x, [field]: Math.max(0, value) } : x)
+  })),
+
+  updateSchedule: (id, timeSlots, hoursDay, hoursNight) => set(s => ({
+    selectedAppliances: s.selectedAppliances.map(x =>
+      x.id === id ? { ...x, timeSlots, hoursDay, hoursNight } : x
+    )
   })),
 
   toggleExpansion: () => set(s => ({ expansionMode: !s.expansionMode })),

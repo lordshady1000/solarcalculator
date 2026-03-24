@@ -16,15 +16,57 @@ export function calculateTotalLoad(appliances: ISelectedAppliance[]): LoadResult
   return { peakWatts, dayWh, nightWh, totalWh: dayWh + nightWh };
 }
 
-export function sizeInverter(peakWatts: number, expansionMode: boolean): InverterResult {
-  const withSurge = peakWatts * SURGE_FACTOR;
-  const withExpansion = expansionMode ? withSurge * EXPANSION_MULTIPLIER : withSurge;
-  const kva = Math.ceil((withExpansion / 1000) * 10) / 10;
+/**
+ * Calculates the maximum possible surge wattage.
+ * This is the worst-case scenario where all motor loads start simultaneously.
+ * We use the HIGHEST single-appliance surge + running watts of everything else,
+ * which is more realistic than assuming all motors start at the exact same moment.
+ */
+function calculateSurgeWatts(appliances: ISelectedAppliance[]): number {
+  if (appliances.length === 0) return 0;
+
+  // Calculate total running watts
+  const totalRunning = appliances.reduce((sum, a) => sum + a.customWattage * a.quantity, 0);
+
+  // Find the highest single-appliance surge ABOVE its running watts
+  let maxSurgeExtra = 0;
+  for (const a of appliances) {
+    const running = a.customWattage * a.quantity;
+    const surgeTotal = running * (a.surgeMultiplier || 1.0);
+    const surgeExtra = surgeTotal - running; // The extra watts needed on startup
+    if (surgeExtra > maxSurgeExtra) {
+      maxSurgeExtra = surgeExtra;
+    }
+  }
+
+  // Worst case: everything running + biggest motor starting up
+  return totalRunning + maxSurgeExtra;
+}
+
+/**
+ * Sizes the inverter using SURGE watts (not just running watts).
+ * This ensures the inverter can handle motor startup surges from ACs, pumps, etc.
+ */
+export function sizeInverter(appliances: ISelectedAppliance[], expansionMode: boolean): InverterResult {
+  const runningWatts = appliances.reduce((sum, a) => sum + a.customWattage * a.quantity, 0);
+  const surgeWatts = calculateSurgeWatts(appliances);
+
+  // Use the higher of: surge watts OR running watts × generic surge factor
+  const effectivePeak = Math.max(surgeWatts, runningWatts * SURGE_FACTOR);
+  const withExpansion = expansionMode ? effectivePeak * EXPANSION_MULTIPLIER : effectivePeak;
+
+  // Convert watts to kVA (assuming power factor ~0.8 for mixed loads)
+  const kva = Math.ceil((withExpansion / 800) * 10) / 10;
+
   const recommendedKva = STANDARD_INVERTER_KVA.find(s => s >= kva) || STANDARD_INVERTER_KVA[STANDARD_INVERTER_KVA.length - 1];
-  const type: InverterResult["type"] = expansionMode || peakWatts > 3000 ? "Hybrid Inverter" : "Standard Inverter";
+
+  const hasMotorLoads = appliances.some(a => (a.surgeMultiplier || 1) >= 2.5);
+  const type: InverterResult["type"] = expansionMode || hasMotorLoads || runningWatts > 3000 ? "Hybrid Inverter" : "Standard Inverter";
+
   const reason = expansionMode
-    ? "Hybrid inverter selected for expansion compatibility. 1.5x capacity buffer applied for future loads."
-    : "Standard inverter sized at 1.25x peak load to handle surge currents safely.";
+    ? `Hybrid inverter sized for ${(surgeWatts/1000).toFixed(1)}kW surge (motor startups) with 1.5× expansion buffer.`
+    : `Sized for ${(surgeWatts/1000).toFixed(1)}kW peak surge — accounts for motor startup currents (ACs: 4×, pumps: 4×, fridges: 3.5×).`;
+
   return { calculatedKva: kva, recommendedKva, type, reason };
 }
 
@@ -38,8 +80,8 @@ export function sizeBatteryBank(nightWh: number, expansionMode: boolean): Batter
   const seriesCount = voltage === 48 ? 4 : voltage === 24 ? 2 : 1;
   const kwh = Math.round((totalAh * voltage) / 1000 * 10) / 10;
   const reason = expansionMode
-    ? `48V architecture chosen for scalability. ${EXPANSION_BATTERY_MULT}x buffer for future nighttime loads. ${BATTERY_DOD * 100}% DoD protects battery longevity.`
-    : `${voltage}V system optimized for your load size. ${BATTERY_DOD * 100}% Depth of Discharge ensures 3000+ cycle battery life.`;
+    ? `48V architecture for scalability. ${EXPANSION_BATTERY_MULT}× buffer. ${BATTERY_DOD * 100}% DoD (LiFePO4).`
+    : `${voltage}V system for your load. ${BATTERY_DOD * 100}% DoD ensures long cycle life with LiFePO4 batteries.`;
   return { voltage, totalAh, kwh, recommendedBatteryAh, parallelStrings, seriesCount, totalBatteries: parallelStrings * seriesCount, reason };
 }
 
@@ -50,7 +92,7 @@ export function sizeSolarArray(dayWh: number, nightWh: number, expansionMode: bo
   const panelCount = Math.ceil(calculatedWatts / STANDARD_PANEL_WATT);
   const totalCapacity = panelCount * STANDARD_PANEL_WATT;
   const reason = expansionMode
-    ? `Array sized with ${EXPANSION_BATTERY_MULT}x expansion headroom. Based on ${PEAK_SUN_HOURS}h peak sun.`
+    ? `Array sized with ${EXPANSION_BATTERY_MULT}× expansion headroom. Based on ${PEAK_SUN_HOURS}h peak sun.`
     : `Panels sized to recharge batteries and sustain daytime loads within ${PEAK_SUN_HOURS} peak sun hours.`;
   return { calculatedWatts, recommendedPanelWatt: STANDARD_PANEL_WATT, panelCount, totalCapacity, reason };
 }
@@ -59,7 +101,7 @@ export function calculateSystem(appliances: ISelectedAppliance[], expansionMode:
   const load = calculateTotalLoad(appliances);
   return {
     load,
-    inverter: sizeInverter(load.peakWatts, expansionMode),
+    inverter: sizeInverter(appliances, expansionMode),
     battery: sizeBatteryBank(load.nightWh, expansionMode),
     solar: sizeSolarArray(load.dayWh, load.nightWh, expansionMode),
   };

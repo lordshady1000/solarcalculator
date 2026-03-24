@@ -6,6 +6,7 @@ import { formatWh, formatWattage } from "@/utils/formatters";
 import { Plus, Minus, Trash2, Zap, ChevronDown, ChevronUp } from "lucide-react";
 import Button from "@/components/common/Button";
 import TimeSchedule from "./TimeSchedule";
+import type { TimeSlot } from "@/types";
 
 interface SelectedAppliancesProps {
   onCalculate: () => void;
@@ -13,7 +14,7 @@ interface SelectedAppliancesProps {
 
 export default function SelectedAppliances({ onCalculate }: SelectedAppliancesProps) {
   const { selectedAppliances, liveLoad, hasAppliances } = useSolarLogic();
-  const { removeAppliance, updateQuantity, updateField, runCalculation } = useSolarStore();
+  const { removeAppliance, updateQuantity, updateSchedule, runCalculation } = useSolarStore();
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const handleCalc = () => {
@@ -21,9 +22,8 @@ export default function SelectedAppliances({ onCalculate }: SelectedAppliancesPr
     onCalculate();
   };
 
-  const handleTimeUpdate = (id: string, hoursDay: number, hoursNight: number) => {
-    updateField(id, "hoursDay", hoursDay);
-    updateField(id, "hoursNight", hoursNight);
+  const handleScheduleUpdate = (id: string, slots: TimeSlot[], hoursDay: number, hoursNight: number) => {
+    updateSchedule(id, slots, hoursDay, hoursNight);
   };
 
   if (!hasAppliances) return null;
@@ -40,9 +40,12 @@ export default function SelectedAppliances({ onCalculate }: SelectedAppliancesPr
         {selectedAppliances.map(s => {
           const isExpanded = expandedId === s.id;
           const totalHours = s.hoursDay + s.hoursNight;
+          const hasSurge = (s.surgeMultiplier || 1) > 1.5;
+          const surgeW = s.customWattage * s.quantity * (s.surgeMultiplier || 1);
+
           return (
             <div key={s.id} className={`sel-card ${isExpanded ? "sel-card--expanded" : ""}`}>
-              {/* Top row: icon, name, qty, summary, actions */}
+              {/* Main row */}
               <div className="sel-card__top">
                 <span className="sel-card__icon">{s.icon}</span>
                 <div className="sel-card__info">
@@ -52,39 +55,47 @@ export default function SelectedAppliances({ onCalculate }: SelectedAppliancesPr
                     {s.source === "es" && <span className="src-tag src-tag--es">ES</span>}
                   </span>
                   <span className="sel-card__sub">
-                    {s.customWattage * s.quantity}W · {totalHours}h/day · {s.customWattage * s.quantity * totalHours}Wh/day
+                    {s.customWattage * s.quantity}W
+                    {hasSurge && <span className="surge-warn"> · ⚡ {(surgeW / 1000).toFixed(1)}kW surge</span>}
+                    {totalHours > 0 && <> · {totalHours}h/day · {s.customWattage * s.quantity * totalHours}Wh/day</>}
                   </span>
                 </div>
 
+                {/* Quantity */}
                 <div className="qty-ctrl">
                   <button onClick={() => updateQuantity(s.id, -1)} className="qty-btn"><Minus size={14} /></button>
                   <span className="qty-val">{s.quantity}</span>
                   <button onClick={() => updateQuantity(s.id, 1)} className="qty-btn"><Plus size={14} /></button>
                 </div>
 
+                {/* Schedule toggle */}
                 <button
                   onClick={() => setExpandedId(isExpanded ? null : s.id)}
-                  className="schedule-toggle"
-                  title="Set usage schedule"
+                  className={`schedule-toggle ${isExpanded ? "schedule-toggle--active" : ""}`}
                 >
-                  {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                  <span className="schedule-toggle__label">Schedule</span>
+                  {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  <span className="schedule-toggle__label">
+                    {totalHours > 0 ? `${totalHours}h` : "Schedule"}
+                  </span>
                 </button>
 
+                {/* Delete */}
                 <button onClick={() => removeAppliance(s.id)} className="del-btn"><Trash2 size={15} /></button>
               </div>
 
-              {/* Expanded: Time schedule picker */}
+              {/* Expanded: Time schedule */}
               {isExpanded && (
                 <div className="sel-card__schedule fade-up">
                   <p className="sel-card__schedule-hint">
-                    When do you use this appliance? We&apos;ll automatically calculate solar vs battery hours.
-                    <span className="sel-card__schedule-note">☀️ Solar window: 7am – 6pm</span>
+                    When do you use this appliance? We automatically split your hours into
+                    <strong> solar</strong> (panels power it directly) and
+                    <strong> battery</strong> (drains your batteries).
                   </p>
                   <TimeSchedule
+                    timeSlots={s.timeSlots || [{ from: 8, to: 17 }]}
                     hoursDay={s.hoursDay}
                     hoursNight={s.hoursNight}
-                    onUpdate={(hD, hN) => handleTimeUpdate(s.id, hD, hN)}
+                    onUpdate={(slots, hD, hN) => handleScheduleUpdate(s.id, slots, hD, hN)}
                   />
                 </div>
               )}
@@ -93,6 +104,7 @@ export default function SelectedAppliances({ onCalculate }: SelectedAppliancesPr
         })}
       </div>
 
+      {/* Live load summary */}
       {liveLoad && (
         <div className="load-bar">
           {[
