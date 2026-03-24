@@ -13,7 +13,7 @@ const ApplianceSchema = new Schema<IAppliance>(
   },
   {
     timestamps: true,
-    toJSON: { virtuals: true, transform: (_doc, ret) => { ret.id = ret._id.toString(); delete ret.__v; return ret; } },
+    toJSON: { virtuals: true, transform: (_doc, ret) => { ret.id = ret._id.toString(); delete (ret as { __v?: unknown }).__v; return ret; } },
   }
 );
 

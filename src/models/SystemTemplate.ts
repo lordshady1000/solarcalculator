@@ -12,7 +12,7 @@ const SystemTemplateSchema = new Schema<SystemTemplate>(
   },
   {
     timestamps: true,
-    toJSON: { virtuals: true, transform: (_doc, ret) => { ret.id = ret._id.toString(); delete ret.__v; return ret; } },
+    toJSON: { virtuals: true, transform: (_doc, ret) => { (ret as any).id = ret._id.toString(); delete (ret as { __v?: unknown }).__v; return ret; } },
   }
 );
 
