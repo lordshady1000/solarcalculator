@@ -70,18 +70,34 @@ export function sizeInverter(appliances: ISelectedAppliance[], expansionMode: bo
   return { calculatedKva: kva, recommendedKva, type, reason };
 }
 
-export function sizeBatteryBank(nightWh: number, expansionMode: boolean): BatteryResult {
-  const voltage: BatteryResult["voltage"] = expansionMode ? 48 : nightWh > 3000 ? 48 : nightWh > 1500 ? 24 : 12;
-  const withLosses = nightWh * SYSTEM_LOSSES;
+export function sizeBatteryBank(nightWh: number, peakWatts: number, expansionMode: boolean): BatteryResult {
+  // Minimum buffer: 2 hours of peak load — covers morning ramp-up,
+  // afternoon decline, and cloud cover dips even for daytime-only setups.
+  const BUFFER_HOURS = 2;
+  const minimumWh = peakWatts * BUFFER_HOURS;
+
+  // Use the greater of: actual night usage OR minimum daytime buffer
+  const effectiveWh = Math.max(nightWh, minimumWh);
+  const isDaytimeBuffer = nightWh < minimumWh;
+
+  const voltage: BatteryResult["voltage"] = expansionMode ? 48 : effectiveWh > 3000 ? 48 : effectiveWh > 1500 ? 24 : 12;
+  const withLosses = effectiveWh * SYSTEM_LOSSES;
   const withExpansion = expansionMode ? withLosses * EXPANSION_BATTERY_MULT : withLosses;
   const totalAh = Math.ceil(withExpansion / (voltage * BATTERY_DOD));
   const recommendedBatteryAh: 100 | 200 = totalAh > 100 ? 200 : 100;
   const parallelStrings = Math.ceil(totalAh / recommendedBatteryAh);
   const seriesCount = voltage === 48 ? 4 : voltage === 24 ? 2 : 1;
   const kwh = Math.round((totalAh * voltage) / 1000 * 10) / 10;
-  const reason = expansionMode
-    ? `48V architecture for scalability. ${EXPANSION_BATTERY_MULT}× buffer. ${BATTERY_DOD * 100}% DoD (LiFePO4).`
-    : `${voltage}V system for your load. ${BATTERY_DOD * 100}% DoD ensures long cycle life with LiFePO4 batteries.`;
+
+  let reason: string;
+  if (isDaytimeBuffer) {
+    reason = `Even with daytime-only usage, batteries are essential. Solar panels don't produce full power before 10am, after 3pm, or during cloud cover. This ${kwh}kWh bank provides a ${BUFFER_HOURS}-hour buffer (${(minimumWh/1000).toFixed(1)}kWh) so your ${(peakWatts/1000).toFixed(1)}kW load runs smoothly all day — the inverter pulls from batteries when panel output dips and recharges them when the sun is strong.`;
+  } else {
+    reason = expansionMode
+      ? `48V architecture for scalability. ${EXPANSION_BATTERY_MULT}× buffer. ${BATTERY_DOD * 100}% DoD (LiFePO4).`
+      : `${voltage}V system for your load. ${BATTERY_DOD * 100}% DoD ensures long cycle life with LiFePO4 batteries. Covers ${(nightWh/1000).toFixed(1)}kWh night usage.`;
+  }
+
   return { voltage, totalAh, kwh, recommendedBatteryAh, parallelStrings, seriesCount, totalBatteries: parallelStrings * seriesCount, reason };
 }
 
@@ -102,7 +118,7 @@ export function calculateSystem(appliances: ISelectedAppliance[], expansionMode:
   return {
     load,
     inverter: sizeInverter(appliances, expansionMode),
-    battery: sizeBatteryBank(load.nightWh, expansionMode),
+    battery: sizeBatteryBank(load.nightWh, load.peakWatts, expansionMode),
     solar: sizeSolarArray(load.dayWh, load.nightWh, expansionMode),
   };
 }

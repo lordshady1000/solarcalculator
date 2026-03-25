@@ -41,7 +41,7 @@ async function withRetry(fn: () => Promise<Response>, label: string, maxRetries 
   throw new Error(`${label} retries exhausted`);
 }
 
-// ─── Provider: Google Gemini (FREE) ───
+// ─── Provider: Google Gemini  ───
 async function callGemini(q: string) {
   const r = await withRetry(
     () => fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_API_KEY}`, {
