@@ -2,7 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/config/environment";
 import type { ApiResponse, AiLookupResult } from "@/types";
 
-const PROMPT = `You are an appliance energy expert for the African/Nigerian market. Return ONLY a valid JSON array (no markdown, no backticks) of 1-3 appliances. Each object: {"name":"string","wattage":number,"category":"string (Lighting|Cooling|Kitchen|Entertainment|Office|Laundry|Utility|Security|Personal|Business)","icon":"emoji","notes":"1 sentence"}. Be accurate with real wattages.`;
+const PROMPT = `You are an appliance energy expert for the African/Nigerian market.
+
+CRITICAL: Your response must be ONLY a JSON array. No text before or after. No markdown. No explanation. Just the raw JSON array starting with [ and ending with ].
+
+Return 1-3 appliances matching the query. Each object must have exactly these 5 fields:
+{"name":"string","wattage":number,"category":"string","icon":"emoji","notes":"string"}
+
+Valid categories: Lighting, Cooling, Kitchen, Entertainment, Office, Laundry, Utility, Security, Personal, Business
+
+Rules:
+- wattage must be a number (no quotes)
+- icon must be a single emoji
+- notes must be 1 short sentence, no newlines
+- Be accurate with real-world wattages
+- For Nigerian/African brands, use local market specifications`;
 
 // ─── Helper: wait ms ───
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -35,7 +49,7 @@ async function callGemini(q: string) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: `${PROMPT}\n\nAppliance: "${q}"` }] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 1000 },
+        generationConfig: { temperature: 0.3, maxOutputTokens: 1000, responseMimeType: "application/json" },
       }),
     }),
     "Gemini"
@@ -131,7 +145,71 @@ export async function POST(req: NextRequest) {
     }
 
     const raw = await callAI(query.trim());
-    const parsed: AiLookupResult[] = JSON.parse(raw.replace(/```json|```/g, "").trim());
+    console.log("AI raw response (first 500 chars):", raw.slice(0, 500));
+
+    // ── Robust JSON extraction ──
+    // Gemini often wraps JSON in markdown, adds preamble text, or includes
+    // newlines/smart quotes inside strings. We handle all of it.
+    let parsed: AiLookupResult[] = [];
+
+    try {
+      // Step 1: Try to extract JSON array from the raw text
+      let jsonStr = raw;
+
+      // Remove markdown code fences
+      jsonStr = jsonStr.replace(/```json\s*/gi, "").replace(/```\s*/g, "");
+
+      // Find the first '[' and last ']' — the actual JSON array
+      const firstBracket = jsonStr.indexOf("[");
+      const lastBracket = jsonStr.lastIndexOf("]");
+
+      if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+        jsonStr = jsonStr.slice(firstBracket, lastBracket + 1);
+      }
+
+      // Fix common Gemini issues:
+      // - Replace smart quotes with regular quotes
+      jsonStr = jsonStr.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"');
+      jsonStr = jsonStr.replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'");
+
+      // - Remove control characters (except newlines in strings — we handle those next)
+      jsonStr = jsonStr.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
+
+      // - Fix unescaped newlines inside JSON strings by replacing them with spaces
+      // This regex finds content between quotes and replaces newlines within
+      jsonStr = jsonStr.replace(/"([^"]*?)"/g, (match: string) => {
+        return match.replace(/\n/g, " ").replace(/\r/g, "");
+      });
+
+      // - Remove trailing commas before ] or }
+      jsonStr = jsonStr.replace(/,\s*([\]}])/g, "$1");
+
+      parsed = JSON.parse(jsonStr);
+    } catch (parseErr) {
+      // Step 2: Fallback — try to parse each object individually
+      console.warn("JSON parse failed, trying fallback extraction:", parseErr);
+
+      const objectRegex = /\{[^{}]*"name"\s*:\s*"[^"]+?"[^{}]*"wattage"\s*:\s*\d+[^{}]*\}/g;
+      const matches = raw.match(objectRegex);
+
+      if (matches && matches.length > 0) {
+        for (const m of matches) {
+          try {
+            const obj = JSON.parse(m);
+            if (obj.name && typeof obj.wattage === "number") {
+              parsed.push(obj);
+            }
+          } catch {
+            // Skip malformed individual objects
+          }
+        }
+      }
+
+      if (parsed.length === 0) {
+        throw new Error("Could not parse AI response. Please try a different query.");
+      }
+    }
+
     const valid = parsed.filter(r => r.name && typeof r.wattage === "number").slice(0, 3);
 
     return NextResponse.json({ success: true, data: valid } satisfies ApiResponse<AiLookupResult[]>);
